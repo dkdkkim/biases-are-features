@@ -29,23 +29,3 @@ def logger_setting(exp_name, save_dir, debug):
     else:
         logger.setLevel(logging.INFO)
     return logger
-
-class Timer(object):
-    def __init__(self, logger, max_step, last_step=0):
-        self.logger = logger
-        self.max_step = max_step
-        self.step = last_step
-
-        curr_time = time.time()
-        self.start = curr_time
-        self.last = curr_time
-
-    def __call__(self):
-        curr_time = time.time()
-        self.step += 1
-
-        duration = curr_time - self.last
-        remaining = (self.max_step - self.step) * (curr_time - self.start) / self.step / 3600
-        msg = 'TIMER, duration(s)|remaining(h), %f, %f' % (duration, remaining)
-
-        self.last = curr_time

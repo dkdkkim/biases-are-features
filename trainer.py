@@ -13,7 +13,7 @@ import sys
 
 from tqdm import tqdm
 
-from utils import logger_setting, Timer
+from utils import logger_setting
 
 
 class GradReverse(torch.autograd.Function):
@@ -173,7 +173,6 @@ class Trainer(object):
             self._load_model()
 
         self._mode_setting(is_train=True)
-        timer = Timer(self.logger, self.option.max_step)
         start_epoch = 0
         for step in range(start_epoch, self.option.max_step):
             if self.option.train_baseline:
