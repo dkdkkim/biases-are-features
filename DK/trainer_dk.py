@@ -29,21 +29,102 @@ class GradReverse(torch.autograd.Function):
 def grad_reverse(x):
     return GradReverse.apply(x)
 
+class AdaptiveConcatPool2d(torch.nn.Module):
+    "Layer that concats `AdaptiveAvgPool2d` and `AdaptiveMaxPool2d`."
+    def __init__(self, sz=None):
+        "Output will be 2*sz or 2 if sz is None"
+        super(AdaptiveConcatPool2d, self).__init__()
+        self.output_size = sz or 1
+        self.ap = torch.nn.AdaptiveAvgPool2d(self.output_size)
+        self.mp = torch.nn.AdaptiveMaxPool2d(self.output_size)
+
+    def forward(self, x): return torch.cat([self.mp(x), self.ap(x)], 1)
+
+class FinetuneModel():
+    def __init__(self) -> None:
+        self.bn_types = (nn.BatchNorm1d, nn.BatchNorm2d, nn.BatchNorm3d)
+    
+    def freeze_all(self, model_params):
+        for param in model_params:
+            param.requires_grad = False
+
+    def create_head(self, nf, nc, bn_final=False, single_head=False):
+        "Model head that takes in 'nf' features and outputs 'nc' classes"
+        pool = AdaptiveConcatPool2d()
+        layers = [pool, torch.nn.Flatten()]
+        if single_head:
+            layers += self.head_blocks(nf, 0.5, nc)
+        else:
+            layers += self.head_blocks(nf, 0.25, 512, torch.nn.ReLU(inplace=True))
+            layers += self.head_blocks(512, 0.5, nc)
+        
+        if bn_final:
+            layers.append(nn.BatchNorm1d(nc, momentum=0.01))
+        
+        return nn.Sequential(*layers)
+
+    def head_blocks(self, in_dim, p, out_dim, activation=None):
+        "Basic Linear block"
+        layers = [
+            nn.BatchNorm1d(in_dim),
+            nn.Dropout(p),
+            nn.Linear(in_dim, out_dim)
+        ]
+        
+        if activation is not None:
+            layers.append(activation)
+            
+        return layers     
+
+    def requires_grad(self, layer):
+        "Determines whether 'layer' requires gradients"
+        ps = list(layer.parameters())
+        if not ps: return None
+        return ps[0].requires_grad
+
+    def cnn_model(self, model, nc, hidden, single_head=False, bn_final=False, init=torch.nn.init.kaiming_normal_):
+        "Creates a model using a pretrained 'model' and appends a new head to it with 'nc' outputs"
+        
+        # remove dense and freeze everything
+        if single_head:
+            body = nn.Sequential(*list(model.children())[:-1])
+        else:
+            body = nn.Sequential(*list(model.children())[:-2])
+        head = self.create_head(hidden, nc, bn_final, single_head)
+        
+        model = torch.nn.Sequential(body, head)
+        
+        # freeze the resnet34 base of the model
+        self.freeze_all(model[0].parameters())
+        
+        # initialize the weights of the head
+        for child in model[1].children():
+            if isinstance(child, torch.nn.Module) and (not isinstance(child, self.bn_types)) and self.requires_grad(child): 
+                init(child.weight)
+        
+        return model                            
+
 
 
 class Trainer(object):
-    def __init__(self, option):
+    def __init__(self, option, steps_per_epoch):
         self.option = option
 
         self._build_model()
-        self._set_optimizer()
+        self._set_optimizer(steps_per_epoch)
         self.logger = logger_setting(option.exp_name, option.save_dir, option.debug)
 
     def _build_model(self):
         if self.option.model == 'cnn':
             self.net = model.convnet(num_classes=self.option.n_class)
         elif self.option.model == 'resnet18':
-            self.net = models.resnet18(pretrained = False, num_classes=self.option.n_class)
+            if self.option.use_pretrain:
+                resnet =  models.resnet18(pretrained = True)
+                resnet.eval()
+                ft = FinetuneModel()
+                self.net = ft.cnn_model(resnet, self.option.n_class, 1024, bn_final=True)
+            else:
+                self.net = models.resnet18(pretrained = False, num_classes=self.option.n_class)
             # self.net = models.resnet18(pretrained = True)
             # self.net.fc = nn.Linear(512, self.option.n_class)
         
@@ -51,18 +132,41 @@ class Trainer(object):
             self.net = models.resnet101(pretrained = False, num_classes=self.option.n_class)
 
 
-        elif self.option.model == 'densenet':
-            self.net = models.densenet121(pretrained = False, num_classes=self.option.n_class)
-
-        elif self.option.model == 'inception':
-            self.net = models.inception_v3(pretrained = False, num_classes=self.option.n_class)
+        elif self.option.model == 'vgg19':
+            if self.option.use_pretrain:
+                vgg19 =  models.vgg19(pretrained = True)
+                vgg19.eval()
+                ft = FinetuneModel()
+                self.net = ft.cnn_model(vgg19, self.option.n_class, 1024, bn_final=True)
+            else:
+                self.net = models.vgg19(pretrained = False, num_classes=self.option.n_class)
+        
+        elif self.option.model == 'mobilenet':
+            if self.option.use_pretrain:
+                mobilenet =  models.mobilenet_v2(pretrained = True)
+                mobilenet.eval()
+                ft = FinetuneModel()
+                self.net = ft.cnn_model(mobilenet, self.option.n_class, 2560, bn_final=True, single_head=True)
+            else:
+                self.net = models.vgg19(pretrained = False, num_classes=self.option.n_class)
 
         elif self.option.model == 'googlenet':
-            self.net = models.googlenet(pretrained = False, num_classes=self.option.n_class)
-        
+            if self.option.use_pretrain:
+                googlenet =  models.googlenet(pretrained = True)
+                googlenet.eval()
+                ft = FinetuneModel()
+                self.net = ft.cnn_model(googlenet, self.option.n_class, 2048, bn_final=True)
+            else:
+                self.net = models.googlenet(pretrained = False, num_classes=self.option.n_class)
 
         elif self.option.model == 'alexnet':
-            self.net = models.alexnet(pretrained = False, num_classes=self.option.n_class)
+            if self.option.use_pretrain:
+                alexnet =  models.alexnet(pretrained = True)
+                alexnet.eval()
+                ft = FinetuneModel()
+                self.net = ft.cnn_model(alexnet, self.option.n_class, 512, bn_final=True)
+            else:
+                self.net = models.alexnet(pretrained = False, num_classes=self.option.n_class)
 
         self.loss = nn.CrossEntropyLoss(ignore_index=255)
 
@@ -71,19 +175,22 @@ class Trainer(object):
             self.loss.cuda()
 
 
-    def _set_optimizer(self):
+    def _set_optimizer(self, steps):
         # self.optim = optim.SGD(filter(lambda p: p.requires_grad, self.net.parameters()), lr=self.option.lr, momentum=self.option.momentum, weight_decay=self.option.weight_decay)
         # self.optim = optim.Adam(filter(lambda p: p.requires_grad, self.net.parameters()), lr=self.option.lr, weight_decay=self.option.weight_decay)
         self.optim = optim.Adam(self.net.parameters(), lr=self.option.lr, weight_decay=self.option.weight_decay)
 
         lr_lambda = lambda step: self.option.lr_decay_rate ** (step // self.option.lr_decay_period)
         self.scheduler = optim.lr_scheduler.LambdaLR(self.optim, lr_lambda=lr_lambda, last_epoch=-1)
+        if self.option.use_pretrain:
+            self.optim = optim.Adam(self.net.parameters(), lr=1e-7,  weight_decay=1e-5)
+            self.scheduler = torch.optim.lr_scheduler.OneCycleLR(self.optim, max_lr=5e-2, pct_start=0.3, steps_per_epoch=steps, epochs=self.option.max_step)
 
 
     @staticmethod
     def _weights_init_xavier(m):
         classname = m.__class__.__name__
-        if classname == 'BasicConv2d':
+        if classname == 'BasicConv2d' or classname == 'ConvBNReLU':
             pass
         elif classname.find('Conv') != -1:
             nn.init.xavier_normal_(m.weight.data, gain=1.0)
@@ -115,9 +222,6 @@ class Trainer(object):
             images = self._get_variable(images)
             labels = self._get_variable(labels)
             pred_label = self.net(images)
-            # print(pred_label.topk(k=1, dim=1))            
-            # print(labels)
-            # input('enter')
 
             total_num_correct += self._num_correct(pred_label,labels,topk=1).data
             batch_size = images.shape[0]
@@ -128,13 +232,12 @@ class Trainer(object):
             loss.backward()
             self.optim.step()
         avg_acc = total_num_correct/total_num_test
-        # msg = f"[TRAIN] LOSS : {loss_sum/len(data_loader)}"
         msg = f"[TRAIN] LOSS  {loss_sum/len(data_loader)}, ACCURACY : {avg_acc}"
 
         self.logger.info(msg)
 
 
-    def _validate(self, data_loader):
+    def _validate(self, data_loader, step=0):
         self._mode_setting(is_train=False)
 
         if not self.option.is_train:
@@ -158,9 +261,6 @@ class Trainer(object):
 
                 # self.optim.zero_grad()
                 pred_label = self.net(images)
-                
-                # print(pred_label)
-                # input('enter')
 
                 loss = self.loss(pred_label, torch.squeeze(labels))
                 
@@ -171,16 +271,13 @@ class Trainer(object):
                
         avg_loss = total_loss/total_num_test
         avg_acc = total_num_correct/total_num_test
-        msg = f"[EVALUATION] LOSS  {avg_loss}, ACCURACY : {avg_acc}"
+        msg = f"[EVALUATION] step {step}, LOSS {avg_loss}, ACCURACY : {avg_acc}"
         self.logger.info(msg)
 
 
     def _num_correct(self,outputs,labels,topk=1):
         _, preds = outputs.topk(k=topk, dim=1)
         preds = preds.t()
-        # print(preds)
-        # print(labels)
-        # input('enter')
         correct = preds.eq(labels.view(1, -1).expand_as(preds))
         correct = correct.view(-1).sum()
         return correct
@@ -212,7 +309,8 @@ class Trainer(object):
 
 
     def train(self, train_loader, val_loader=None):
-        self._initialization()
+        if not self.option.use_pretrain:
+            self._initialization()
         if self.option.checkpoint is not None:
             self._load_model()
 
@@ -228,7 +326,7 @@ class Trainer(object):
 
             if step == 1 or step % self.option.save_step == 0 or step == (self.option.max_step-1):
                 if val_loader is not None:
-                    self._validate(val_loader)
+                    self._validate(val_loader, step)
                 self._save_model(step)
 
 
