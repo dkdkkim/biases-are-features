@@ -71,7 +71,7 @@ def main():
                                     img_dir='/home/dkkim/workspace/MLVU/biases-are-features/oxford_pet/images',
                                     label_col=label_col)
     test_data = load_annotation(txt_path='/home/dkkim/workspace/MLVU/biases-are-features/oxford_pet/annotations/test.txt', 
-                                img_dir='/home/dkkim/workspace/MLVU/biases-are-features/oxford_pet/images_edge_mask',
+                                img_dir='/home/dkkim/workspace/MLVU/biases-are-features/oxford_pet/images',
                                 label_col=label_col)
     if option.is_train:
         db = Databasket(trainval_data, option.n_class)
@@ -89,7 +89,7 @@ def main():
                             batch_size=option.batch_size,
                             shuffle=True,
                             num_workers=option.num_workers)
-        print(len(train_dataset), len(valid_dataset)
+        print(len(train_dataset), len(valid_dataset))
     else:
         db = Databasket(test_data, option.n_class)
         test_dataset = db.gen_dataset(transforms=valid_transforms)

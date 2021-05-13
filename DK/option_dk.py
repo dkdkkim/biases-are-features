@@ -41,8 +41,7 @@ parser.add_argument('--is_train',         action='store_true',        help='whet
 parser.add_argument('--model',       default='cnn',            help='data split to use')
 parser.add_argument('--CUDA_VISIBLE_DEVICES',       default='3',            help='data split to use')
 parser.add_argument('--data_type',       default='species',            help='species or breeds')
-parser.add_argument('--data_type',       action='store_true',            help='whethe it use validation set by split training set')
-
+parser.add_argument('--is_valid',         action='store_true',        help='whether it use validationset')
 
 def get_option():
     option = parser.parse_args()
