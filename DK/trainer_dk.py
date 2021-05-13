@@ -15,7 +15,8 @@ import sys
 from tqdm import tqdm
 
 from utils import logger_setting
-
+# from model_baf_vgg19 import vgg19 as vgg19_baf
+from model_vgg import vgg19 as vgg19_baf
 
 class GradReverse(torch.autograd.Function):
     @staticmethod
@@ -167,6 +168,17 @@ class Trainer(object):
                 self.net = ft.cnn_model(alexnet, self.option.n_class, 512, bn_final=True)
             else:
                 self.net = models.alexnet(pretrained = False, num_classes=self.option.n_class)
+        
+        elif self.option.model == 'vgg19_baf':
+            from model_baf_vgg19 import vgg19 as vgg19_baf
+
+            if self.option.use_pretrain:
+                vgg19_baf = vgg19_baf(pretrained = True)
+                vgg19_baf.eval()
+                ft = FinetuneModel()
+                self.net = ft.cnn_model(vgg19_baf, self.option.n_class, 512, bn_final=True)
+            else:
+                self.net = vgg19_baf(pretrained = False, num_classes=self.option.n_class)
 
         self.loss = nn.CrossEntropyLoss(ignore_index=255)
 
@@ -178,10 +190,14 @@ class Trainer(object):
     def _set_optimizer(self, steps):
         # self.optim = optim.SGD(filter(lambda p: p.requires_grad, self.net.parameters()), lr=self.option.lr, momentum=self.option.momentum, weight_decay=self.option.weight_decay)
         # self.optim = optim.Adam(filter(lambda p: p.requires_grad, self.net.parameters()), lr=self.option.lr, weight_decay=self.option.weight_decay)
+        
         self.optim = optim.Adam(self.net.parameters(), lr=self.option.lr, weight_decay=self.option.weight_decay)
-
         lr_lambda = lambda step: self.option.lr_decay_rate ** (step // self.option.lr_decay_period)
         self.scheduler = optim.lr_scheduler.LambdaLR(self.optim, lr_lambda=lr_lambda, last_epoch=-1)
+        
+        # self.optim = optim.Adam(self.net.parameters(), lr=1e-7,  weight_decay=1e-5)
+        # self.scheduler = torch.optim.lr_scheduler.OneCycleLR(self.optim, max_lr=5e-2, pct_start=0.3, steps_per_epoch=steps, epochs=self.option.max_step)
+        
         if self.option.use_pretrain:
             self.optim = optim.Adam(self.net.parameters(), lr=1e-7,  weight_decay=1e-5)
             self.scheduler = torch.optim.lr_scheduler.OneCycleLR(self.optim, max_lr=5e-2, pct_start=0.3, steps_per_epoch=steps, epochs=self.option.max_step)
